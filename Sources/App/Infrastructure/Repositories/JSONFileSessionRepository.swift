@@ -145,29 +145,15 @@ final class JSONFileSessionRepository: SessionRepository {
         }
     }
 
-    /// Reconstructs a `Session` domain object from its DTO.
-    /// Because `Session.init` always sets `status = .active` and `segments = []`,
-    /// we need to replay the persisted state onto the new instance.
     private func reconstruct(from dto: SessionDTO) -> Session {
-        let session = Session(
+        Session(
             id: dto.id,
             language: dto.language,
-            provider: dto.provider
+            provider: dto.provider,
+            status: dto.status,
+            segments: dto.segments,
+            startedAt: dto.startedAt,
+            stoppedAt: dto.stoppedAt
         )
-
-        // Replay segments onto the session while it is still active.
-        for segment in dto.segments {
-            session.addSegment(segment)
-        }
-
-        // If the persisted session was stopped, stop the reconstructed one.
-        // Note: `stop()` sets `stoppedAt` to Date(), so the timestamp will
-        // differ from the persisted value. A production system would expose
-        // a richer internal initializer on Session; for now this is acceptable.
-        if dto.status == .stopped {
-            session.stop()
-        }
-
-        return session
     }
 }

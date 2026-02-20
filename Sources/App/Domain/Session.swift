@@ -30,6 +30,26 @@ final class Session {
         self.stoppedAt = nil
     }
 
+    /// Internal initializer for reconstructing a session from persisted data.
+    /// This preserves the exact timestamps from storage rather than creating new ones.
+    internal init(
+        id: UUID,
+        language: String,
+        provider: String,
+        status: SessionStatus,
+        segments: [Segment],
+        startedAt: Date,
+        stoppedAt: Date?
+    ) {
+        self.id = id
+        self.language = language
+        self.provider = provider
+        self.status = status
+        self.segments = segments
+        self.startedAt = startedAt
+        self.stoppedAt = stoppedAt
+    }
+
     func addSegment(_ segment: Segment) {
         guard status == .active else { return }
         segments.append(segment)
