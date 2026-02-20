@@ -18,20 +18,18 @@ actor TranscriptionService {
     func startTranscription(language: String) async throws -> Session {
         let session = Session(language: language, provider: provider.name)
 
-        provider.onSegment = { [weak self] segment in
-            guard let self else { return }
-            Task {
-                await self.handleSegment(segment, for: session.id)
+        try await provider.connect(
+            language: language,
+            onSegment: { [weak self] segment in
+                guard let self else { return }
+                Task {
+                    await self.handleSegment(segment, for: session.id)
+                }
+            },
+            onError: { error in
+                print("[TranscriptionService] Provider error for session \(session.id): \(error.localizedDescription)")
             }
-        }
-
-        provider.onError = { error in
-            // Errors from the provider stream are logged but do not interrupt
-            // the session; callers observe them via getTranscription polling.
-            print("[TranscriptionService] Provider error for session \(session.id): \(error.localizedDescription)")
-        }
-
-        try await provider.connect(language: language)
+        )
 
         activeSessions[session.id] = session
         segmentCountSinceLastPersist[session.id] = 0

@@ -3,14 +3,11 @@ import Vapor
 import NIOPosix
 import WebSocketKit
 
-final class DeepgramProvider: TranscriptionProvider {
+actor DeepgramProvider: TranscriptionProvider {
 
     // MARK: - TranscriptionProvider
 
-    let name = "deepgram"
-
-    var onSegment: ((Segment) -> Void)?
-    var onError: ((Error) -> Void)?
+    nonisolated let name = "deepgram"
 
     // MARK: - Private state
 
@@ -20,6 +17,8 @@ final class DeepgramProvider: TranscriptionProvider {
     private var segmentCounter: Int = 0
     private var isConnected: Bool = false
     private var currentLanguage: String = "en"
+    private var onSegment: (@Sendable (Segment) -> Void)?
+    private var onError: (@Sendable (Error) -> Void)?
 
     // MARK: - Constants
 
@@ -32,7 +31,11 @@ final class DeepgramProvider: TranscriptionProvider {
 
     // MARK: - Connect
 
-    func connect(language: String) async throws {
+    func connect(
+        language: String,
+        onSegment: @escaping @Sendable (Segment) -> Void,
+        onError: @escaping @Sendable (Error) -> Void
+    ) async throws {
         guard let key = ProcessInfo.processInfo.environment[Constants.environmentKey],
               !key.isEmpty else {
             throw ZeloError.apiKeyMissing(Constants.environmentKey)
@@ -41,6 +44,8 @@ final class DeepgramProvider: TranscriptionProvider {
         apiKey = key
         currentLanguage = language
         segmentCounter = 0
+        self.onSegment = onSegment
+        self.onError = onError
 
         try await openWebSocket(language: language)
     }
@@ -56,8 +61,10 @@ final class DeepgramProvider: TranscriptionProvider {
         try await ws.close().get()
         isConnected = false
         webSocket = nil
+        onSegment = nil
+        onError = nil
 
-        try? eventLoopGroup?.syncShutdownGracefully()
+        try? await eventLoopGroup?.shutdownGracefully()
         eventLoopGroup = nil
     }
 
@@ -104,20 +111,17 @@ final class DeepgramProvider: TranscriptionProvider {
 
             WebSocket.connect(to: url.absoluteString, headers: headers, on: elg) { [weak self] ws in
                 guard let self else { return }
-                self.webSocket = ws
-                self.isConnected = true
+
+                Task { await self.setWebSocket(ws) }
 
                 ws.onText { [weak self] _, text in
-                    self?.handleTextMessage(text)
+                    guard let self else { return }
+                    Task { await self.handleTextMessage(text) }
                 }
 
                 ws.onClose.whenComplete { [weak self] _ in
                     guard let self else { return }
-                    if self.isConnected {
-                        self.isConnected = false
-                        self.webSocket = nil
-                        self.attemptReconnect()
-                    }
+                    Task { await self.handleClose() }
                 }
 
                 if !resumed {
@@ -130,6 +134,19 @@ final class DeepgramProvider: TranscriptionProvider {
                     continuation.resume(throwing: error)
                 }
             }
+        }
+    }
+
+    private func setWebSocket(_ ws: WebSocket) {
+        self.webSocket = ws
+        self.isConnected = true
+    }
+
+    private func handleClose() {
+        if self.isConnected {
+            self.isConnected = false
+            self.webSocket = nil
+            self.attemptReconnect()
         }
     }
 
