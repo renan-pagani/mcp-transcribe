@@ -43,35 +43,11 @@ struct StartTranscriptionTool: MCPTool {
                 "wsEndpoint": wsEndpoint,
             ]
 
-            return .success(id: id, result: mcpContent(result))
+            return .success(id: id, result: MCPResponse.content(result))
         } catch let error as ZeloError {
             return .error(id: id, code: error.mcpErrorCode, message: error.localizedDescription)
         } catch {
             return .error(id: id, code: -32000, message: error.localizedDescription)
         }
     }
-}
-
-// MARK: - MCP Content Helper
-
-/// Builds the standard MCP tool response envelope:
-/// `{ "content": [{ "type": "text", "text": "<json>" }] }`
-func mcpContent(_ value: Any) -> [String: Any] {
-    let jsonText: String
-    if let data = try? JSONSerialization.data(
-        withJSONObject: value, options: [.sortedKeys]
-    ) {
-        jsonText = String(data: data, encoding: .utf8) ?? "{}"
-    } else {
-        jsonText = "{}"
-    }
-
-    return [
-        "content": [
-            [
-                "type": "text",
-                "text": jsonText,
-            ] as [String: Any]
-        ]
-    ]
 }

@@ -38,7 +38,7 @@ struct StopTranscriptionTool: MCPTool {
                 "provider": session.provider,
             ]
 
-            return .success(id: id, result: mcpContent(result))
+            return .success(id: id, result: MCPResponse.content(result))
         } catch let error as ZeloError {
             return .error(id: id, code: error.mcpErrorCode, message: error.localizedDescription)
         } catch {
