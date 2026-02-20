@@ -11,7 +11,7 @@ enum ExportFormat: String {
     case srt
 }
 
-final class Session {
+final class Session: @unchecked Sendable {
     let id: UUID
     let language: String
     let provider: String
