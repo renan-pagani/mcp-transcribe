@@ -131,5 +131,4 @@ Sources/App/
 ## Limitacoes conhecidas
 
 - Suporta apenas **1 sessao ativa por vez** (DeepgramProvider e instancia unica)
-- O `DeepgramProvider` nao e thread-safe (e `final class`, nao actor)
-- Build debug gera binario de ~165MB. Use `swift build -c release` para producao
+- Build debug gera binario de ~40MB. Use `swift build -c release` para producao
