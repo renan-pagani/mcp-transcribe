@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+zelo.db
+*.db
+sessions/
+.env
+.mcp.json
