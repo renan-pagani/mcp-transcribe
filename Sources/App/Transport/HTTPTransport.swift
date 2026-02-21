@@ -23,18 +23,34 @@ struct HTTPTransport {
             }
         }
 
-        // Audio WebSocket endpoint
-        app.webSocket("audio", ":sessionId") { req, ws in
-            guard let sessionId = req.parameters.get("sessionId") else {
+        // Audio WebSocket endpoint — allow large frames for raw PCM audio
+        app.webSocket("audio", ":sessionId", maxFrameSize: .init(integerLiteral: 1 << 20)) { req, ws async in
+            guard let sessionId = req.parameters.get("sessionId"),
+                  let uuid = UUID(uuidString: sessionId) else {
                 try? await ws.close()
                 return
             }
-            AudioWebSocketHandler.handle(
-                ws: ws,
-                sessionId: sessionId,
-                transcriptionService: transcriptionService,
-                logger: req.logger
-            )
+
+            let logger = req.logger
+            logger.info("AudioWebSocket: connected for session \(uuid)")
+
+            ws.onBinary { ws, buffer async in
+                let data = Data(buffer: buffer)
+                guard !data.isEmpty else { return }
+
+                do {
+                    try await transcriptionService.sendAudioChunk(sessionId: uuid, data: data)
+                } catch {
+                    logger.error("AudioWebSocket: send failed: \(error.localizedDescription)")
+                    if case ZeloError.sessionNotFound = error {
+                        try? await ws.close(code: .goingAway)
+                    }
+                }
+            }
+
+            // Keep handler alive until WebSocket closes
+            _ = try? await ws.onClose.get()
+            logger.info("AudioWebSocket: closed for session \(uuid)")
         }
 
         let host = Environment.get("HOST") ?? "0.0.0.0"
@@ -43,8 +59,11 @@ struct HTTPTransport {
         app.http.server.configuration.port = port
 
         if background {
-            // Start HTTP server directly, bypassing Vapor's command-line parsing
+            // Start HTTP server directly, bypassing Vapor's command-line parsing.
+            // Must await onShutdown to keep `app` alive; otherwise ARC releases it
+            // and Vapor tears down the server immediately after start() returns.
             try await app.server.start(address: .hostname(host, port: port))
+            try await app.server.onShutdown.get()
         } else {
             try await app.execute()
         }

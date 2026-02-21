@@ -26,39 +26,32 @@ enum AudioWebSocketHandler {
 
         logger.info("AudioWebSocket: connected for session \(uuid)")
 
-        // All callback registrations must happen on the WebSocket's event loop
-        // to avoid NIOLoopBound precondition failures.
-        ws.eventLoop.execute {
-            // Handle incoming binary audio frames.
-            ws.onBinary { ws, buffer in
-                let data = Data(buffer: buffer)
-                guard !data.isEmpty else { return }
+        // Use the async overload of onBinary — it handles event loop hopping internally,
+        // avoiding NIOLoopBound crashes when called from Swift concurrency contexts.
+        ws.onBinary { ws, buffer async in
+            let data = Data(buffer: buffer)
+            guard !data.isEmpty else { return }
 
-                Task {
-                    do {
-                        try await transcriptionService.sendAudioChunk(sessionId: uuid, data: data)
-                    } catch {
-                        logger.error("AudioWebSocket: failed to send audio chunk for session \(uuid): \(error.localizedDescription)")
-                        if case ZeloError.sessionNotFound = error {
-                            try? await ws.close(code: .goingAway)
-                        }
-                    }
+            do {
+                try await transcriptionService.sendAudioChunk(sessionId: uuid, data: data)
+            } catch {
+                logger.error("AudioWebSocket: failed to send audio chunk for session \(uuid): \(error.localizedDescription)")
+                if case ZeloError.sessionNotFound = error {
+                    try? await ws.close(code: .goingAway)
                 }
             }
+        }
 
-            // Handle incoming text frames (unexpected but log them).
-            ws.onText { _, text in
-                logger.warning("AudioWebSocket: received unexpected text frame for session \(uuid): \(text.prefix(100))")
-            }
+        ws.onText { _, text async in
+            logger.warning("AudioWebSocket: received unexpected text frame for session \(uuid): \(text.prefix(100))")
+        }
 
-            // Handle connection close.
-            ws.onClose.whenComplete { result in
-                switch result {
-                case .success:
-                    logger.info("AudioWebSocket: closed for session \(uuid)")
-                case .failure(let error):
-                    logger.error("AudioWebSocket: close error for session \(uuid): \(error.localizedDescription)")
-                }
+        ws.onClose.whenComplete { result in
+            switch result {
+            case .success:
+                logger.info("AudioWebSocket: closed for session \(uuid)")
+            case .failure(let error):
+                logger.error("AudioWebSocket: close error for session \(uuid): \(error.localizedDescription)")
             }
         }
     }

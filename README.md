@@ -6,6 +6,8 @@ MCP server para transcrever audio em tempo real usando Deepgram. Funciona como p
 
 O servidor roda em **modo hibrido**: stdio para o protocolo MCP (como o Claude Code se comunica com ele) e um servidor HTTP em background na porta 8080 para receber audio via WebSocket.
 
+A conexao com o Deepgram e **lazy** — so e estabelecida quando o primeiro chunk de audio chega, evitando timeouts por inatividade.
+
 ```
 Claude Code <--stdio--> MCP Server --websocket--> Deepgram
                             ^
@@ -30,8 +32,8 @@ Claude Code <--stdio--> MCP Server --websocket--> Deepgram
 
 - Swift 5.9+
 - Conta no [Deepgram](https://deepgram.com) com API key
-- `websocat` (para enviar audio via WebSocket): `cargo install websocat`
-- PulseAudio/PipeWire (para capturar audio do sistema)
+- `websocat` para enviar audio via WebSocket: `cargo install websocat`
+- PulseAudio/PipeWire para capturar audio do sistema
 
 ### Build
 
@@ -43,7 +45,7 @@ O binario fica em `.build/debug/App`.
 
 ### Configurar no Claude Code
 
-Crie o arquivo `.mcp.json` na raiz do projeto:
+Crie o arquivo `.mcp.json` na raiz do projeto (ou do diretorio onde voce abre o Claude Code):
 
 ```json
 {
@@ -60,29 +62,36 @@ Crie o arquivo `.mcp.json` na raiz do projeto:
 }
 ```
 
-Inicie o Claude Code no diretorio do projeto. As 6 tools vao aparecer automaticamente.
+Inicie (ou reinicie) o Claude Code no diretorio do projeto. As 6 tools vao aparecer automaticamente.
 
 ## Uso
 
 ### 1. Iniciar transcricao
 
-No Claude Code, use a tool `start_transcription`. Ela retorna um `sessionId` e um `wsEndpoint`.
+No Claude Code, peca para usar a tool `start_transcription`. Ela retorna um `sessionId` e um `wsEndpoint`.
 
-### 2. Conectar audio
+### 2. Conectar audio do sistema
 
 Em outro terminal, rode:
 
 ```bash
 stdbuf -oL parec --format=s16le --rate=16000 --channels=1 \
   --device=alsa_output.pci-0000_00_1f.3.analog-stereo.monitor \
-  --latency-msec=50 \
   | websocat -b ws://localhost:8080/audio/{SESSION_ID}
+```
+
+Substitua `{SESSION_ID}` pelo ID retornado no passo 1.
+
+Para descobrir o device correto do seu sistema:
+
+```bash
+pactl list short sources | grep monitor
 ```
 
 **Importante:**
 - `websocat -b` (binary mode) e obrigatorio. Sem `-b`, o audio e enviado como text frames e corrompe os dados
-- `stdbuf -oL` forca o flush do buffer do `parec`
-- `--device=...monitor` captura o audio que sai do sistema (o que voce ouve). Para descobrir o device correto, rode `pactl list short sources`
+- `stdbuf -oL` forca o flush do buffer do `parec` para que o audio flua continuamente
+- O device `*.monitor` captura o audio que sai do sistema (o que voce ouve), incluindo Discord, YouTube, etc
 
 ### 3. Puxar transcricao
 
@@ -92,15 +101,29 @@ Use a tool `get_transcription` passando o `sessionId`. Os segmentos vem com text
 
 Use `stop_transcription` para encerrar. A sessao e persistida em `./sessions/{sessionId}.json`.
 
+### 5. Exportar
+
+Use `export_session` para exportar em JSON, TXT ou SRT (legendas).
+
 ## Rodar como servidor HTTP (sem Claude Code)
 
 ```bash
-DEEPGRAM_API_KEY=sua-key .build/debug/App
+DEEPGRAM_API_KEY=sua-key .build/debug/App serve
 ```
 
 Sobe na porta 8080 com:
 - `POST /mcp` — endpoint JSON-RPC para as tools
 - `WS /audio/:sessionId` — WebSocket para audio
+
+Variaveis de ambiente opcionais:
+- `HOST` — endereco de bind (default: `0.0.0.0`)
+- `PORT` — porta HTTP (default: `8080`)
+
+## Testes
+
+```bash
+swift test
+```
 
 ## Estrutura
 
@@ -121,7 +144,7 @@ Sources/App/
     Segment.swift               # Segmento transcrito
   Infrastructure/
     Providers/
-      DeepgramProvider.swift    # WebSocket com Deepgram
+      DeepgramProvider.swift    # WebSocket com Deepgram (actor, conexao lazy)
     Audio/
       AudioWebSocketHandler.swift  # Recebe audio via WS
     Repositories/
@@ -131,4 +154,4 @@ Sources/App/
 ## Limitacoes conhecidas
 
 - Suporta apenas **1 sessao ativa por vez** (DeepgramProvider e instancia unica)
-- Build debug gera binario de ~40MB. Use `swift build -c release` para producao
+- Build debug gera binario grande. Use `swift build -c release` para producao

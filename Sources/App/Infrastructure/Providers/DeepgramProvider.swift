@@ -1,5 +1,6 @@
 import Foundation
 import Vapor
+import Logging
 import NIOPosix
 import WebSocketKit
 
@@ -8,6 +9,8 @@ actor DeepgramProvider: TranscriptionProvider {
     // MARK: - TranscriptionProvider
 
     nonisolated let name = "deepgram"
+
+    private let logger = Logger(label: "zelo.deepgram")
 
     // MARK: - Private state
 
@@ -29,7 +32,7 @@ actor DeepgramProvider: TranscriptionProvider {
         static let environmentKey = "DEEPGRAM_API_KEY"
     }
 
-    // MARK: - Connect
+    // MARK: - Connect (lazy — only validates API key, does NOT open WebSocket)
 
     func connect(
         language: String,
@@ -47,7 +50,7 @@ actor DeepgramProvider: TranscriptionProvider {
         self.onSegment = onSegment
         self.onError = onError
 
-        try await openWebSocket(language: language)
+        logger.info("Prepared for Deepgram connection", metadata: ["language": "\(language)"])
     }
 
     // MARK: - Disconnect
@@ -71,8 +74,14 @@ actor DeepgramProvider: TranscriptionProvider {
     // MARK: - Send audio
 
     func send(audioChunk: Data) async throws {
-        guard isConnected, let ws = webSocket else {
-            throw ZeloError.providerConnectionFailed("Not connected")
+        // Lazy connect: open WebSocket on first audio chunk
+        if !isConnected {
+            try await openWebSocket(language: currentLanguage)
+            logger.info("Connected to Deepgram on first audio chunk")
+        }
+
+        guard let ws = webSocket else {
+            throw ZeloError.providerConnectionFailed("WebSocket not available after connect")
         }
 
         let bytes = [UInt8](audioChunk)
@@ -84,6 +93,11 @@ actor DeepgramProvider: TranscriptionProvider {
     // MARK: - Private helpers
 
     private func openWebSocket(language: String) async throws {
+        // Clean up previous connection if any
+        if let oldElg = eventLoopGroup {
+            try? await oldElg.shutdownGracefully()
+        }
+
         var components = URLComponents(string: Constants.baseURL)!
         components.queryItems = [
             URLQueryItem(name: "model", value: Constants.model),
@@ -112,8 +126,6 @@ actor DeepgramProvider: TranscriptionProvider {
             WebSocket.connect(to: url.absoluteString, headers: headers, on: elg) { [weak self] ws in
                 guard let self else { return }
 
-                Task { await self.setWebSocket(ws) }
-
                 ws.onText { [weak self] _, text in
                     guard let self else { return }
                     Task { await self.handleTextMessage(text) }
@@ -124,9 +136,12 @@ actor DeepgramProvider: TranscriptionProvider {
                     Task { await self.handleClose() }
                 }
 
-                if !resumed {
-                    resumed = true
-                    continuation.resume()
+                Task {
+                    await self.setWebSocket(ws)
+                    if !resumed {
+                        resumed = true
+                        continuation.resume()
+                    }
                 }
             }.whenFailure { error in
                 if !resumed {
@@ -144,6 +159,7 @@ actor DeepgramProvider: TranscriptionProvider {
 
     private func handleClose() {
         if self.isConnected {
+            logger.warning("Deepgram WebSocket closed unexpectedly, reconnecting...")
             self.isConnected = false
             self.webSocket = nil
             self.attemptReconnect()
@@ -214,6 +230,7 @@ actor DeepgramProvider: TranscriptionProvider {
 
             do {
                 try await openWebSocket(language: language)
+                logger.info("Reconnected to Deepgram")
                 return
             } catch {
                 if attempt == retries - 1 {
